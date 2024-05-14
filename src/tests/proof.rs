@@ -1,12 +1,13 @@
 #![cfg(all(feature = "std", feature = "rocksdb"))]
 use bitvec::{order::Msb0, vec::BitVec, view::BitView};
-use pathfinder_common::{hash::PedersenHash, trie::TrieNode};
+use pathfinder_common::{felt, hash::PedersenHash, trie::TrieNode};
 use pathfinder_crypto::Felt as PathfinderFelt;
 use pathfinder_merkle_tree::tree::{MerkleTree, TestStorage};
 use pathfinder_storage::{Node, StoredNode};
 use rand::Rng;
 use starknet_types_core::{felt::Felt, hash::Pedersen};
 use std::collections::HashMap;
+use pathfinder_common::hash::FeltHash;
 
 use crate::{
     databases::{create_rocks_db, RocksDB, RocksDBConfig},
@@ -351,6 +352,72 @@ fn one_element_proof() {
             pair1.1,
             &bonsai_proof
         ),
+        Some(Membership::Member)
+    );
+}
+
+#[test]
+fn successfully_forge_proof() {
+    let mut storage = TestStorage::default();
+
+    let mut pathfinder_merkle_tree: MerkleTree<PedersenHash, 251> = MerkleTree::empty();
+    let mut i: u64 = 0;
+    while i < 2000 {
+        let key = PedersenHash::hash(felt!("0x0"), PathfinderFelt::from_u64(i));
+        let value = PedersenHash::hash(key.clone(), key.clone());
+        pathfinder_merkle_tree
+            .set(
+                &storage,
+                key.clone().view_bits().to_bitvec(),
+                value.into(),
+            )
+            .unwrap();
+
+       pathfinder_merkle_tree.set(&storage, key.view_bits().to_bitvec(), value).unwrap();
+        i += 1;
+    }
+
+    let (commitment, index) = commit_and_persist(pathfinder_merkle_tree.clone(), &mut storage);
+    let key = PedersenHash::hash(felt!("0x0"), PathfinderFelt::from_u64(33));
+    let valid_value = PedersenHash::hash(key.clone(), key.clone());
+
+    let mut pathfinder_proof = MerkleTree::<PedersenHash, 251>::get_proof(index, &storage, &*key.view_bits().to_bitvec()).unwrap();
+    let mut bonsai_proof: Vec<ProofNode> = pathfinder_proof.into_iter().map(ProofNode::from).collect();
+
+    // This is what the valid proof looks like:
+    // let root = 0x04946c7636b878064ddaab68a34c440f7961b854934e9b7347d981f9f5f768f2;
+    // let key = 0x066488017aeba3e8d5a2074c8113b076f7e624fa97a1933623e5ba034d22e555;
+    // let proof = array![
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x01f387675be9603ca64faee950fc41c70c4e8c534fb9ac6d235bf7ef732fdbb6,0x01bdac12073dd4161c28740f654bdd4162aad1e8c0588989f7d05977fc5ef41e)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x00f618893b917332d0f527205f94ab7bd8ab20da5b60be66f22b90d08100aba4,0x0001e996b4969876b0d24e9c9446f9aa9efef959462e2a9e800945942d4d0b63)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x07cf400d095212c51ce3320971de539643d8eabaffb4c2a4369e222f3606f03a,0x0321dba462885b2a1969701b2c9efebb1407a0c1108fe27da6f54db7808721d2)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x02051cd969f864999bb8849bc81b7f9269da475cfe3917572ee45019c1848bbf,0x06a08b555530572d8ef951bcc258775dd8f9a16491b5ef9ce1d6487469b09cd3)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x02827a2dd7fed7114104184561c21b38d79ec0b1702adb234392b8d9905818b4,0x051e8aeb18901009d0d3df64f3642ce60b139c46a2f8ca618bbf6dcf3b27679b)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x01e526c4030bf33ce4be9b7029652b3c57a63623817d5f72edda770441755b48,0x02e5b904361ae2272b75fc7e9bdfc271547f0ec4baea5830431ef0600f91622b)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x04d3adf75cac7938edf92e395c8ab056f87f4c97b594f834a7b7b8086651e615,0x07bf353cef62649614805b0afb71a68bea111943398ccf6708b018299eceef08)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x02a4a2338d90a7d7ce22adc430c5600761151e5f2c1ac9b4d9804ddbabaf4989,0x02ee6c70d6f243e1255be910c52bb5416962bd0dee3ef3cde567ffa311e73f37)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x030a9e7caa6a8429fbd73f5e1ea5061e586b044b631368b27401071c8bc6985a,0x013689ea58dffd14f77c212d485ac79c1f1770d4ab5de94f745b41eb1ca6a750)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x040edfc2b946ee3af0c01e29b8730acc152a4c371ff9a89d8e4898d6cd57505f,0x042ab88780b5891adb125bcfcaf3f6cf9adeb1639609156668faf9c2d8fd5bc7)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x06e5ffbc0b2dc82ea66cb5ff715ef6fc5b3f37d85c1c4114b39731bdc14fad61,0x0715e3724d0fc71047a1e432d5967f4c9b22eccc809ac53bcd002e70caf02930)),
+    //     TrieNode::Edge(EdgeNodeImpl::new(0x80, 0x06c45f152061e861397038a59dacc35e75a908bdd2f0424332c759904bc5e3b2, 1)),
+    //     TrieNode::Binary(BinaryNodeImpl::new(0x02be2c76a8d7e1169bd74d024e32ac4164d887ebde370a0721d7a18136e434ba,0x01e61e1f576c6d6bfae08d5a5b99ea2f918c5dea81191ef31f683d0a71c02c49)),
+    //     TrieNode::Edge(EdgeNodeImpl::new(0x08017aeba3e8d5a2074c8113b076f7e624fa97a1933623e5ba034d22e555, 0x02ca0f0f20113199ab071dcd6b0a8264410b1680b1e08e4653e80850ccdb3640, 238))
+    // ];
+
+    // this proof should pass
+    assert_eq!(
+        BonsaiStorage::<BasicId, RocksDB<BasicId>, Pedersen>::verify_proof(Felt::from_bytes_be(commitment.as_be_bytes()), &*key.view_bits().to_bitvec(), Felt::from_bytes_be(valid_value.as_be_bytes()), bonsai_proof.as_slice()),
+        Some(Membership::Member)
+    );
+
+    // we can now forge the proof, by setting the value to the value of a preceding edge node
+    let invalid_value = Felt::from_hex("0x06c45f152061e861397038a59dacc35e75a908bdd2f0424332c759904bc5e3b2").unwrap(); // this is a node binary_node hash
+    // and removing the final two proof nodes. This is possible as we do not ensure the key was evaluated all the way.
+    let forged_proof = &bonsai_proof[..12];
+
+    // this should def not pass
+    assert_eq!(
+        BonsaiStorage::<BasicId, RocksDB<BasicId>, Pedersen>::verify_proof(Felt::from_bytes_be(commitment.as_be_bytes()), &*key.view_bits().to_bitvec(), invalid_value, forged_proof),
         Some(Membership::Member)
     );
 }

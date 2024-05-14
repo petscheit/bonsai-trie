@@ -25,6 +25,7 @@ use super::{
 
 #[cfg(test)]
 use log::trace;
+use pathfinder_common::trie::TrieNode;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Membership {
@@ -44,6 +45,15 @@ pub struct NodesMapping(HashMap<NodeId, Node>);
 pub enum ProofNode {
     Binary { left: Felt, right: Felt },
     Edge { child: Felt, path: Path },
+}
+
+impl From<TrieNode> for ProofNode {
+    fn from(node: TrieNode) -> Self {
+        match node {
+            TrieNode::Binary { left, right } => ProofNode::Binary { left: Felt::from_bytes_be(left.as_be_bytes()), right:  Felt::from_bytes_be(right.as_be_bytes())},
+            TrieNode::Edge { child, path } => ProofNode::Edge { child: Felt::from_bytes_be(child.as_be_bytes()), path: Path(path) },
+        }
+    }
 }
 
 impl ProofNode {
